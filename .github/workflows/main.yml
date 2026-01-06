@@ -1,0 +1,86 @@
+name: Code Signing Template
+ 
+on: 
+  workflow_dispatch:
+ 
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [windows-latest]
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4 
+     
+      - name: Install DigiCert Client tools from Github Custom Actions marketplace
+        uses: digicert/code-signing-software-trust-action@v1.0.0
+   
+      - name: Set up certificate 
+        run: | 
+          echo "${{ secrets.SM_CLIENT_CERT_FILE_B64 }}" | base64 --decode > /d/Certificate_pkcs12.p12 
+        shell: bash  
+        
+      - name: Set variables
+        id: variables
+        run: |
+          echo "::set-output name=version::${GITHUB_REF#refs/tags/v}"
+          echo "::set-output name=KEYPAIR_NAME::github-action-keypair"
+          echo "SM_HOST=${{ secrets.SM_HOST }}" >> "$GITHUB_ENV"
+          echo "SM_API_KEY=${{ secrets.SM_API_KEY }}" >> "$GITHUB_ENV"
+          echo "SM_CLIENT_CERT_FILE=D:\\Certificate_pkcs12.p12" >> "$GITHUB_ENV"
+          echo "SM_CLIENT_CERT_PASSWORD=${{ secrets.SM_CLIENT_CERT_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "C:\Program Files\DigiCert\DigiCert Keylocker Tools" >> $GITHUB_PATH
+        shell: bash
+
+      # Adds signtool to PATH to smctl can find it
+      - name: Locate and add signtool to PATH
+        uses: kamaranl/add-signtool-action@v1
+
+      # Returns report of keylocker variables, available certificates and signing tools. 
+      # https://docs.digicert.com/en/digicert-keylocker/smctl-command-manual/healthcheck/check-user-credentials-and-tools.html
+      - name: Healthcheck      
+        run: |
+           smctl healthcheck 
+        shell: cmd
+
+      # Re-syncs available certificates to local keystore and confirms it is available for usage.
+      # https://docs.digicert.com/en/software-trust-manager/client-tools/command-line-interface/smctl/manage-commands-for-windows.html#sync-certificate-935951
+      - name: Windows CertSync
+        run: |
+           smctl windows certsync 
+        shell: cmd
+        
+      # Custom for this env
+      # --------------------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          
+      - name: Build with PyInstaller
+        run: pyinstaller --onefile main.py
+      # ----------------------------------------
+      
+      # Signing compiled binary using the keypair alias or by thumbprint. 
+        # smctl sign --keypair-alias key_632991115 --input dist/auth-key_script.exe
+        # smctl sign --fingerprint <your certificate SHA1 fingerprint> --input dist/auth-key_script.exe
+      - name: Signing using keypair alias
+        run: | 
+           smctl sign --keypair-alias key_632991115 --input dist/main.exe
+        shell: cmd
+
+      # Save compiled exe
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-${{ matrix.os }}
+          path: dist/
+      
